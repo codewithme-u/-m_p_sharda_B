@@ -17,6 +17,11 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 @Configuration
 @EnableMethodSecurity
@@ -30,6 +35,7 @@ public class SecurityConfig {
         this.jwtUtil = jwtUtil;
     }
 
+    // --------- Authentication / Password beans ----------
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
@@ -48,41 +54,73 @@ public class SecurityConfig {
         return config.getAuthenticationManager();
     }
 
+    // --------- JWT Filter bean ----------
     @Bean
     public JwtAuthenticationFilter jwtAuthenticationFilter() {
         return new JwtAuthenticationFilter(jwtUtil, userDetailsService);
     }
 
+    // --------- CORS config ----------
+    // Update these origins to match your frontends. Keep exact origins when allowCredentials(true).
+    private static final List<String> ALLOWED_ORIGINS = List.of(
+            "https://m-p-sharda.onrender.com",   // frontend production origin
+            "https://m-p-sharda-b.onrender.com", // backend domain if you need it
+            "http://localhost:4200"              // dev origin
+    );
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(ALLOWED_ORIGINS); // explicit list (required when allowCredentials=true)
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    // --------- Security filter chain ----------
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-            .cors(Customizer.withDefaults())
-            .csrf(csrf -> csrf.disable())
+            .cors(Customizer.withDefaults()) // uses corsConfigurationSource()
+            .csrf().disable()
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(authz -> authz
+                // Allow preflight requests
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                
-                // Allow images
-                .requestMatchers("/uploads/**").permitAll()
-                
-                // ✅ FIX: Allow default error page (helps debug 404s)
-                .requestMatchers("/error").permitAll()
 
+                // Public endpoints
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/stats/**").permitAll()
                 .requestMatchers("/api/institutions/**").permitAll()
-             // Inside SecurityConfig.java -> filterChain method
                 .requestMatchers("/api/quizzes/**").permitAll()
                 .requestMatchers("/api/questions/**").permitAll()
-             // Inside filterChain method
-                .requestMatchers("/api/results/**").authenticated() // Only logged-in users can see history
-                
+                .requestMatchers("/ping", "/actuator/health").permitAll()
+
+                // Allow uploads and H2 console and error page
+                .requestMatchers("/uploads/**").permitAll()
                 .requestMatchers("/h2-console/**").permitAll()
+                .requestMatchers("/error").permitAll()
+
+                // Protected endpoints (example)
+                .requestMatchers("/api/results/**").authenticated()
+
+                // everything else authenticated
                 .anyRequest().authenticated()
             );
 
+        // allow frames for H2 console
         http.headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
+
+        // register JWT filter before UsernamePasswordAuthenticationFilter
         http.addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
+
+        // register DaoAuthenticationProvider so AuthenticationManager can use it
+        http.authenticationProvider(daoAuthenticationProvider());
 
         return http.build();
     }
